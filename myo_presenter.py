@@ -6,6 +6,9 @@ Connects to a Thalmic Labs Myo armband in one of two ways, picked automatically:
   2. Otherwise the PC's built-in Bluetooth LE (Windows' own stack, no pairing needed).
 Force one with:  MyoPresenter.exe --dongle   or   MyoPresenter.exe --ble
 
+Runs in the system tray: click the icon for gesture tips, right-click to exit.
+Log file: %LOCALAPPDATA%\\MyoPresenter\\log.txt
+
 Gestures (Myo's own on-board classifier):
   Double tap / thumb-to-pinky : arm or disarm the controller (safety)
   Wave out                    : next slide        (Right arrow)
@@ -17,6 +20,8 @@ While the laser is on, rotate your forearm to move it (gyro -> mouse).
 import argparse
 import asyncio
 import ctypes
+import os
+import threading
 import re
 import struct
 import sys
@@ -25,7 +30,7 @@ from ctypes import wintypes
 
 from pyomyo import Arm, Myo, Pose, XDirection, emg_mode
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # ---------- tuning ----------
 SENSITIVITY = 0.35      # pixels per (deg/s) per IMU sample
@@ -100,6 +105,7 @@ def move_mouse(dx, dy):
 class Presenter:
     def __init__(self):
         self.vibrate = lambda: None      # set by the active backend
+        self.status = lambda text, notify=False: print(text)   # set by the tray
         self.armed = False
         self.laser = False
         self.last_pose_time = 0.0
@@ -118,6 +124,8 @@ class Presenter:
         # flip vertical axis if the band is worn upside down
         self.x_dir_sign = -1 if xdir == XDirection.X_TOWARD_ELBOW else 1
         print("Arm:", arm.name, xdir.name)
+        if arm != Arm.UNKNOWN:
+            self.status("Synced on %s arm - double tap to arm" % arm.name.lower(), notify=True)
 
     def on_pose(self, pose):
         now = time.time()
@@ -130,7 +138,7 @@ class Presenter:
             self.armed = not self.armed
             if not self.armed and self.laser:
                 self.toggle_laser()
-            print("ARMED" if self.armed else "disarmed")
+            self.status("Armed - gestures active" if self.armed else "Disarmed", notify=True)
             self.buzz(2 if self.armed else 1)
             return
 
@@ -170,7 +178,8 @@ class Presenter:
             self.on_arm(_enum(Arm, data[1]), _enum(XDirection, data[2]))
         elif typ == 2:                                        # removed / unsynced
             self.on_arm(Arm.UNKNOWN, XDirection.UNKNOWN)
-            print("Band unsynced - do the sync gesture (wave out) again.")
+            self.armed = False
+            self.status("Unsynced - do the sync gesture (wave out)", notify=True)
         elif typ == 3 and len(data) >= 3:                     # pose (uint16)
             self.on_pose(_enum(Pose, struct.unpack_from("<H", data, 1)[0]))
 
@@ -192,7 +201,7 @@ def find_dongle():
 
 
 def run_dongle(presenter, port):
-    print("Using the Myo USB dongle on", port)
+    presenter.status("Connecting via USB dongle (%s)..." % port)
     myo = Myo(tty=port, mode=emg_mode.FILTERED)   # FILTERED keeps the classifier on
     presenter.vibrate = lambda: myo.vibrate(1)
     myo.add_pose_handler(presenter.on_pose)
@@ -203,7 +212,7 @@ def run_dongle(presenter, port):
     myo.write_attr(0x19, CMD_UNLOCK_HOLD)
     myo.write_attr(0x19, CMD_LEDS_BLUE)
     myo.vibrate(1)
-    ready_message()
+    presenter.status("Connected via USB dongle - wave out to sync", notify=True)
     try:
         while True:
             myo.run()
@@ -235,12 +244,15 @@ async def _find_myo_ble(timeout=10.0):
 async def run_ble(presenter):
     from bleak import BleakClient
 
-    print("No dongle - using this PC's built-in Bluetooth.")
     while True:
-        print("Scanning for the Myo (tap it or move your arm to wake it)...")
-        dev = await _find_myo_ble()
+        presenter.status("Searching for Myo via Bluetooth...")
+        try:
+            dev = await _find_myo_ble()
+        except Exception as e:          # Bluetooth off / no adapter
+            presenter.status("Bluetooth unavailable: %s" % e)
+            await asyncio.sleep(5)
+            continue
         if dev is None:
-            print("Myo not found, retrying. Is Bluetooth on?")
             continue
         print("Found", dev.name or "Myo", dev.address)
         gone = asyncio.Event()
@@ -267,24 +279,79 @@ async def run_ble(presenter):
                 await client.start_notify(IMU_CHAR, imu_cb)
                 await client.start_notify(CLASSIFIER_CHAR, cls_cb)
                 await cmd(CMD_VIBRATE_SHORT)
-                ready_message()
+                presenter.status("Connected via Bluetooth - wave out to sync", notify=True)
                 await gone.wait()
-                print("Myo disconnected - reconnecting...")
+                presenter.armed = False
+                presenter.status("Myo disconnected - reconnecting...", notify=True)
         except Exception as e:  # connection hiccups are common on shared radios
             print("Bluetooth error:", e, "- retrying in 2 s")
             await asyncio.sleep(2)
 
 
-# ---------- entry point ----------
-def ready_message():
-    print("Connected. Do the sync gesture (wave out) if the logo pulses,")
-    print("then double tap to arm. Ctrl+C to quit.")
+# ---------- tray app ----------
+APP_NAME = "Myo Presenter"
+TIPS = (
+    "Double tap  -  arm / disarm (safety)\n"
+    "Wave out  -  next slide\n"
+    "Wave in  -  previous slide\n"
+    "Fingers spread  -  laser pointer on / off\n"
+    "     (rotate your forearm to move it)\n"
+    "Fist  -  black screen on / off\n\n"
+    "First time on: wave out once to sync the band.\n"
+    "Right-click the tray icon to exit."
+)
+
+
+def resource(name):
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
+
+
+def setup_logging():
+    """A windowed exe has no console, so keep a log for troubleshooting."""
+    if sys.stdout is not None:
+        return
+    folder = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "MyoPresenter")
+    os.makedirs(folder, exist_ok=True)
+    f = open(os.path.join(folder, "log.txt"), "w", buffering=1, encoding="utf-8")
+    sys.stdout = sys.stderr = f
+
+
+def already_running():
+    if sys.platform != "win32":
+        return False
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW(None, False, "Local\\MyoPresenterSingleInstance")
+    return ctypes.get_last_error() == 183          # ERROR_ALREADY_EXISTS
+
+
+def message_box(text, title=APP_NAME):
+    # non-blocking so the tray keeps responding
+    threading.Thread(target=lambda: user32.MessageBoxW(None, text, title, 0x40 | 0x40000),
+                     daemon=True).start()
+
+
+def run_backend(presenter, args):
+    try:
+        port = None if args.ble else find_dongle()
+        if port:
+            run_dongle(presenter, port)
+        elif args.dongle:
+            presenter.status("Myo dongle not found - plug it in and restart", notify=True)
+        else:
+            asyncio.run(run_ble(presenter))
+    except Exception as e:
+        presenter.status("Stopped: %s" % e, notify=True)
+        raise
 
 
 def selftest():
-    """Used by the build to prove both backends are bundled."""
+    """Used by the build to prove everything is bundled."""
     import serial.tools.list_ports  # noqa: F401
     import bleak  # noqa: F401
+    import pystray  # noqa: F401
+    from PIL import Image
+    Image.open(resource("myo.png")).load()
     if sys.platform == "win32":
         import bleak.backends.winrt.client  # noqa: F401
         import bleak.backends.winrt.scanner  # noqa: F401
@@ -292,30 +359,72 @@ def selftest():
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(description="Myo armband presenter")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--dongle", action="store_true", help="only use the blue USB dongle")
     g.add_argument("--ble", action="store_true", help="only use the PC's built-in Bluetooth")
     ap.add_argument("--selftest", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args()
 
     if args.selftest:
-        selftest()
+        try:
+            selftest()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        return
+    if already_running():
+        message_box("Myo Presenter is already running - look for it in the system tray.")
+        time.sleep(5)
         return
 
+    import pystray
+    from PIL import Image
+
     presenter = Presenter()
-    try:
-        port = None if args.ble else find_dongle()
-        if port:
-            run_dongle(presenter, port)
-        elif args.dongle:
-            print("Myo dongle not found. Plug it in, or run without --dongle.")
-            input("Press Enter to exit.")
-        else:
-            asyncio.run(run_ble(presenter))
-    except KeyboardInterrupt:
-        pass
+    state = {"text": "Starting..."}
+
+    def show_tips(icon=None, item=None):
+        message_box("Status: %s\n\n%s" % (state["text"], TIPS), APP_NAME + " " + VERSION)
+
+    def quit_app(icon, item):
+        icon.visible = False
+        icon.stop()
+        os._exit(0)                  # also ends the Bluetooth / serial thread
+
+    icon = pystray.Icon(
+        "MyoPresenter",
+        Image.open(resource("myo.png")),
+        APP_NAME,
+        menu=pystray.Menu(
+            pystray.MenuItem("Gesture tips", show_tips, default=True),   # left-click
+            pystray.MenuItem(lambda item: state["text"], None, enabled=False),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Exit", quit_app),
+        ),
+    )
+
+    def status(text, notify=False):
+        print(time.strftime("%H:%M:%S"), text)
+        state["text"] = text
+        try:
+            icon.title = (APP_NAME + " - " + text)[:127]
+            icon.update_menu()
+            if notify:
+                icon.notify(text, APP_NAME)
+        except Exception:
+            pass
+
+    presenter.status = status
+
+    def on_ready(icon):
+        icon.visible = True
+        threading.Thread(target=run_backend, args=(presenter, args), daemon=True).start()
+        show_tips()                  # quick reminder on launch
+
+    icon.run(setup=on_ready)
 
 
 if __name__ == "__main__":
