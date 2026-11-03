@@ -20,6 +20,14 @@ First time on: wave out once to sync the band.
 
 Log: `%LOCALAPPDATA%\MyoPresenter\log.txt`
 
-Download `MyoPresenter.exe` from the latest Actions run (Artifacts). If SmartScreen complains, go to Properties and tick **Unblock**.
+Download `MyoPresenter.exe` from the [latest release](../../releases/latest). If SmartScreen complains, go to Properties and tick **Unblock**.
 
 `prototype/` holds the original Python version.
+
+
+## Credits
+- [pyomyo](https://github.com/PerlinWarp/pyomyo) and [myo-raw](https://github.com/dzhu/myo-raw) (MIT): BLED112 dongle protocol logic.
+- [Thalmic Labs myo-bluetooth](https://github.com/thalmiclabs/myo-bluetooth) (Apache-2.0): Myo Bluetooth protocol definitions.
+
+## License
+MIT. See [LICENSE](LICENSE).
