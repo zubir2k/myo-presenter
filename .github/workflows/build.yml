@@ -8,19 +8,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install pyomyo bleak pystray pillow pyinstaller
-      - run: python -m PyInstaller --onefile --windowed --name MyoPresenter --icon myo.ico --add-data "myo.png;." --collect-all pyomyo --collect-all bleak --collect-all winrt --collect-all pystray myo_presenter.py
+      - run: dotnet build src/MyoPresenter.csproj -c Release -o out
       - name: Self-test exe
         timeout-minutes: 3
         shell: pwsh
         run: |
-          $p = Start-Process dist\MyoPresenter.exe -ArgumentList '--selftest' -Wait -PassThru
+          $p = Start-Process out\MyoPresenter.exe -ArgumentList '--selftest' -Wait -PassThru
           Get-Content "$env:LOCALAPPDATA\MyoPresenter\log.txt"
           if ($p.ExitCode -ne 0) { exit 1 }
       - uses: actions/upload-artifact@v4
         with:
           name: MyoPresenter
-          path: dist/MyoPresenter.exe
+          path: out/MyoPresenter.exe
