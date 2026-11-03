@@ -2,13 +2,24 @@ name: Build exe
 on:
   push:
     branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - run: dotnet build src/MyoPresenter.csproj -c Release -o out
+      - name: Work out version
+        id: ver
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'release') { $v = '${{ github.event.release.tag_name }}'.TrimStart('v') }
+          else { $v = '0.0.${{ github.run_number }}' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+      - run: dotnet build src/MyoPresenter.csproj -c Release -o out -p:Version=${{ steps.ver.outputs.version }}
       - name: Self-test exe
         timeout-minutes: 3
         shell: pwsh
@@ -18,5 +29,10 @@ jobs:
           if ($p.ExitCode -ne 0) { exit 1 }
       - uses: actions/upload-artifact@v4
         with:
-          name: MyoPresenter
+          name: MyoPresenter-${{ steps.ver.outputs.version }}
           path: out/MyoPresenter.exe
+      - name: Attach exe to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.event.release.tag_name }} out/MyoPresenter.exe --clobber
