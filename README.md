@@ -11,4 +11,6 @@ It runs standalone with no admin rights, using the Myo's blue USB dongle (a plai
 | Fingers spread | Laser pointer on/off (gyro moves it) |
 | Fist | Black screen |
 
+It lives in the system tray: click the icon for gesture tips, right-click > Exit to close. Log: `%LOCALAPPDATA%\MyoPresenter\log.txt`.
+
 Download `MyoPresenter.exe` from the latest Actions run (Artifacts).
