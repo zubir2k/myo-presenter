@@ -1,4 +1,6 @@
-dist/
-build/
-*.spec
+bin/
+obj/
+out/
+*.user
+.vs/
 __pycache__/
