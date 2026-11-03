@@ -11,8 +11,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pyomyo pyinstaller pillow
-      - run: python -m PyInstaller --onefile --name MyoPresenter --icon myo.ico --collect-all pyomyo myo_presenter.py
+      - run: pip install pyomyo bleak pyinstaller pillow
+      - run: python -m PyInstaller --onefile --name MyoPresenter --icon myo.ico --collect-all pyomyo --collect-all bleak --collect-all winrt myo_presenter.py
+      - name: Self-test exe
+        run: dist\MyoPresenter.exe --selftest
       - uses: actions/upload-artifact@v4
         with:
           name: MyoPresenter
