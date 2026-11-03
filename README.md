@@ -1,5 +1,7 @@
 # Myo Presenter
 
+![Myo](myo.png)
+
 Turns a Thalmic Labs Myo armband into a PowerPoint presenter and laser pointer on Windows 10/11.
 
 - **Single ~230 KB exe**: C# on .NET Framework 4.8, which ships with Windows, so there's nothing to install and no admin needed.
