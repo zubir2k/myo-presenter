@@ -1,7 +1,7 @@
 # Myo Presenter
 
 Turns a Thalmic Labs Myo armband into a PowerPoint presenter and laser pointer on Windows 11.
-It runs standalone with no admin rights, using the Myo's blue USB dongle, which Windows sees as a plain COM port.
+It runs standalone with no admin rights, using the Myo's blue USB dongle (a plain COM port to Windows) when it's plugged in, or the PC's built-in Bluetooth when it isn't. Force one with `--dongle` or `--ble`.
 
 | Gesture | Action |
 |---|---|
